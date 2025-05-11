@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import requests, json, base64, datetime as dt
 
 # ---------------------------------
 # Load data & basic setup
@@ -8,6 +9,38 @@ import os
 csv_path = 'temp.csv'
 image_folder = 'images'
 df = pd.read_csv(csv_path)
+
+def push_csv_to_github(df, path="temp.csv"):
+    token = st.secrets["GH_TOKEN"]
+    repo = "your-username/your-repo-name"  # Replace with your actual GitHub repo
+    branch = "main"
+
+    api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
+
+    # Step 1: get current SHA
+    res = requests.get(api_url, headers={"Authorization": f"Bearer {token}"})
+    if res.status_code != 200:
+        st.error("Failed to get file SHA from GitHub")
+        return
+    sha = res.json()["sha"]
+
+    # Step 2: prepare updated content
+    new_content = base64.b64encode(df.to_csv(index=False).encode()).decode()
+    commit_msg = f"Update by Streamlit on {dt.datetime.utcnow().isoformat()}"
+
+    data = {
+        "message": commit_msg,
+        "content": new_content,
+        "sha": sha,
+        "branch": branch
+    }
+
+    # Step 3: send PUT request to update file
+    response = requests.put(api_url, headers={"Authorization": f"Bearer {token}"}, data=json.dumps(data))
+    if response.status_code == 200 or response.status_code == 201:
+        st.success("CSV successfully updated in GitHub!")
+    else:
+        st.error(f"Failed to update CSV: {response.status_code}")
 
 members = ["Yash", "Gagan", "Amit", "Junda", "Xin"]
 st.sidebar.title("Select Member")
@@ -79,7 +112,7 @@ if st.button("Save Changes"):
 # Remove
 if st.button("Remove Question"):
     df = df[df['id'] != image_id].reset_index(drop=True)
-    df.to_csv(csv_path, index=False)
+    push_csv_to_github(df)
     st.success(f"Removed question ID: {image_id}")
     if st.session_state.subset_index >= len(member_df) - 1 and st.session_state.subset_index > 0:
         st.session_state.subset_index -= 1
