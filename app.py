@@ -83,4 +83,4 @@ if st.button("Remove Question"):
     st.success(f"Removed question ID: {image_id}")
     if st.session_state.subset_index >= len(member_df) - 1 and st.session_state.subset_index > 0:
         st.session_state.subset_index -= 1
-    st.experimental_rerun()
+    st.rerun()
