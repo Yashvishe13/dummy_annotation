@@ -12,7 +12,7 @@ df = pd.read_csv(csv_path)
 
 def push_csv_to_github(df, path="temp.csv"):
     token = st.secrets["GH_TOKEN"]
-    repo = "your-username/your-repo-name"  # Replace with your actual GitHub repo
+    repo = "Yashvishe13/dummy_annotation"  # Replace with your actual GitHub repo
     branch = "main"
 
     api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
