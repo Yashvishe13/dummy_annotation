@@ -7,22 +7,22 @@ import io
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# Load your CSV
-df = pd.read_csv("temp.csv")
+# # Load your CSV
+# df = pd.read_csv("temp.csv")
 
-# Split it into 3 parts
-chunks = []
-chunk_size = len(df) // 3
-for i in range(2):
-    chunks.append(df.iloc[i*chunk_size:(i+1)*chunk_size])
-chunks.append(df.iloc[2*chunk_size:])
+# # Split it into 3 parts
+# chunks = []
+# chunk_size = len(df) // 3
+# for i in range(2):
+#     chunks.append(df.iloc[i*chunk_size:(i+1)*chunk_size])
+# chunks.append(df.iloc[2*chunk_size:])
 
-# Save each chunk
-for i, part in enumerate(chunks):
-    db_name = f"data_part{i+1}.db"
-    conn = sqlite3.connect(db_name)
-    part.to_sql("data_table", conn, if_exists="replace", index=False)
-    conn.close()
+# # Save each chunk
+# for i, part in enumerate(chunks):
+#     db_name = f"data_part{i+1}.db"
+#     conn = sqlite3.connect(db_name)
+#     part.to_sql("data_table", conn, if_exists="replace", index=False)
+#     conn.close()
 
 # User -> DB mapping
 USER_DB_MAP = {
