@@ -1,130 +1,229 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 import os
-import requests, json, base64, datetime as dt
+import matplotlib.pyplot as plt
+import io
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-# -------------------- CONFIG --------------------
-repo = "Yashvishe13/dummy_annotation"     # GitHub repo
-branch = "main"                            # Repo branch
-csv_filename_in_repo = "temp.csv"          # File in the repo
-image_folder = "images"                    # Local image folder
-# -------------------------------------------------
+# Load your CSV
+df = pd.read_csv("temp.csv")
 
-# -------- GitHub CSV Read Function --------
-@st.cache_data(ttl=60)
-def load_csv_from_github():
-    token = st.secrets["GH_TOKEN"]
-    url = f"https://raw.githubusercontent.com/{repo}/{branch}/{csv_filename_in_repo}"
-    headers = {"Authorization": f"Bearer {token}"}
-    return pd.read_csv(url)
+# Split it into 3 parts
+chunks = []
+chunk_size = len(df) // 3
+for i in range(2):
+    chunks.append(df.iloc[i*chunk_size:(i+1)*chunk_size])
+chunks.append(df.iloc[2*chunk_size:])
 
-# -------- GitHub CSV Save Function --------
-def push_csv_to_github(df, path=csv_filename_in_repo):
-    token = st.secrets["GH_TOKEN"]
-    api_url = f"https://api.github.com/repos/{repo}/contents/{path}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json"
-    }
+# Save each chunk
+for i, part in enumerate(chunks):
+    db_name = f"data_part{i+1}.db"
+    conn = sqlite3.connect(db_name)
+    part.to_sql("data_table", conn, if_exists="replace", index=False)
+    conn.close()
 
-    # Get file SHA
-    res = requests.get(api_url, headers=headers)
-    if res.status_code != 200:
-        st.error(f"❌ Failed to get file SHA: {res.status_code} - {res.text}")
-        return
-    sha = res.json()["sha"]
+# User -> DB mapping
+USER_DB_MAP = {
+    "Yash": "data_part1.db",
+    "Gagan": "data_part2.db",
+    "Amit": "data_part3.db"
+}
 
-    # Prepare content
-    new_content = base64.b64encode(df.to_csv(index=False).encode()).decode()
-    commit_msg = f"Update via Streamlit on {dt.datetime.utcnow().isoformat()}"
+TABLE_NAME = "data_table"
+IMAGE_FOLDER = "images"
 
-    payload = {
-        "message": commit_msg,
-        "content": new_content,
-        "sha": sha,
-        "branch": branch
-    }
+# ---------- Database Helpers ----------
 
-    # Push update
-    response = requests.put(api_url, headers=headers, data=json.dumps(payload))
-    if response.status_code in [200, 201]:
-        st.success("✅ CSV updated on GitHub.")
+def get_db_connection(user):
+    return sqlite3.connect(USER_DB_MAP[user])
+
+def get_data(user):
+    conn = get_db_connection(user)
+    df = pd.read_sql(f"SELECT * FROM {TABLE_NAME}", conn)
+    conn.close()
+    return df
+
+def update_row(user, row_id, updates):
+    conn = get_db_connection(user)
+    set_clause = ", ".join([f"{col} = ?" for col in updates.keys()])
+    values = list(updates.values()) + [row_id]
+    conn.execute(f"UPDATE {TABLE_NAME} SET {set_clause} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
+def delete_row(user, row_id):
+    conn = get_db_connection(user)
+    conn.execute(f"DELETE FROM {TABLE_NAME} WHERE id = ?", (row_id,))
+    conn.commit()
+    conn.close()
+
+# ---------- Progress Tracking ----------
+
+def get_user_index(user):
+    conn = get_db_connection(user)
+    conn.execute("CREATE TABLE IF NOT EXISTS progress_tracker (user TEXT PRIMARY KEY, question_index INTEGER)")
+    cursor = conn.execute("SELECT question_index FROM progress_tracker WHERE user = ?", (user,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def set_user_index(user, index):
+    conn = get_db_connection(user)
+    conn.execute("""
+        INSERT INTO progress_tracker (user, question_index)
+        VALUES (?, ?)
+        ON CONFLICT(user) DO UPDATE SET question_index=excluded.question_index
+    """, (user, index))
+    conn.commit()
+    conn.close()
+
+# ---------- UI Panel Per User ----------
+
+def show_distribution_charts(df, user):
+    st.subheader("📊 Category Distribution")
+    if "category" in df.columns:
+        cat_counts = df["category"].value_counts()
+        fig1, ax1 = plt.subplots(figsize=(8, 6))
+        bars1 = ax1.bar(cat_counts.index, cat_counts.values)
+        ax1.set_ylabel("Count")
+        ax1.set_title(f"{user} - Category Distribution")
+        ax1.tick_params(axis='x', rotation=90)
+        
+        # Add labels on top of bars
+        for bar in bars1:
+            height = bar.get_height()
+            ax1.annotate(f'{int(height)}',
+                         xy=(bar.get_x() + bar.get_width() / 2, height),
+                         xytext=(0, 3),  # 3 points vertical offset
+                         textcoords="offset points",
+                         ha='center', va='bottom')
+        plt.tight_layout()
+        st.pyplot(fig1)
     else:
-        st.error(f"❌ Failed to update CSV: {response.status_code} - {response.text}")
+        st.info("No 'category' data available.")
 
-# -------- Load Data --------
-df = load_csv_from_github()
+    st.subheader("📊 Subcategory Distribution")
+    if "Subcategory" in df.columns:
+        subcat_counts = df["Subcategory"].value_counts()
+        fig2, ax2 = plt.subplots(figsize=(8, 6))
+        bars2 = ax2.bar(subcat_counts.index, subcat_counts.values)
+        ax2.set_ylabel("Count")
+        ax2.set_title(f"{user} - Subcategory Distribution")
+        ax2.tick_params(axis='x', rotation=90)
+        
+        # Add labels on top of bars
+        for bar in bars2:
+            height = bar.get_height()
+            ax2.annotate(f'{int(height)}',
+                         xy=(bar.get_x() + bar.get_width() / 2, height),
+                         xytext=(0, 3),
+                         textcoords="offset points",
+                         ha='center', va='bottom')
+        plt.tight_layout()
+        st.pyplot(fig2)
+    else:
+        st.info("No 'Subcategory' data available.")
 
-# -------- UI: Member Selection --------
-members = ["Yash", "Gagan", "Amit", "Junda", "Xin"]
-st.sidebar.title("Select Member")
-selected_member = st.sidebar.radio("Team Members", options=members)
 
-# -------- Session Management --------
-if 'subset_index' not in st.session_state or st.session_state.get('last_member') != selected_member:
-    st.session_state.subset_index = 0
-    st.session_state.last_member = selected_member
+def download_csv_button(user):
+    df = get_data(user)
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    st.download_button(
+        label="⬇️ Download CSV",
+        data=csv_buffer.getvalue(),
+        file_name=f"{user}_data.csv",
+        mime="text/csv",
+        key=f"{user}_download"
+    )
 
-# -------- Filter User Data --------
-member_df = df[df['assigned_to'] == selected_member].reset_index(drop=True)
-if member_df.empty:
-    st.warning(f"No questions remaining for {selected_member}.")
-    st.stop()
+def display_user_panel(user):
+    st.header(f"{user}'s Questions")
+    df = get_data(user)
 
-# -------- Navigation --------
-col_nav = st.columns([1, 1])
-with col_nav[0]:
-    if st.button("⬅ Previous") and st.session_state.subset_index > 0:
-        st.session_state.subset_index -= 1
-        st.rerun()
-with col_nav[1]:
-    if st.button("Next ➡") and st.session_state.subset_index < len(member_df) - 1:
-        st.session_state.subset_index += 1
-        st.rerun()
+    if df.empty:
+        st.warning("No questions available.")
+        return
 
-# -------- Display Current Row --------
-current_index = st.session_state.subset_index
-row = member_df.iloc[current_index]
+    # Get question index (from session or DB)
+    if f"{user}_index" not in st.session_state:
+        st.session_state[f"{user}_index"] = get_user_index(user)
+    idx = st.session_state[f"{user}_index"]
+    row = df.iloc[idx]
 
-st.title(f"{selected_member}'s Questions")
-st.write(f"**Progress: {current_index + 1} / {len(member_df)}**")
-st.progress((current_index + 1) / len(member_df))
+    # Progress bar
+    st.markdown(f"**Question {idx + 1} of {len(df)}**")
+    st.progress((idx + 1) / len(df))
 
-# -------- Image Display --------
-image_id = row['id']
-image_path = os.path.join(image_folder, f"{image_id}.jpg")
-if os.path.exists(image_path):
-    st.image(image_path, caption=f"ID: {image_id}", use_container_width=True)
-else:
-    st.warning(f"Image not found for ID {image_id}")
+    # Editable fields
+    st.subheader("Category and Subcategory")
+    category = st.text_input("Category", value=row["category"], key=f"{user}_cat")
+    subcategory = st.text_input("Subcategory", value=row["Subcategory"], key=f"{user}_subcat")
 
-# -------- Editable Fields --------
-title       = st.text_input("Title",              value=row['title'])
-question    = st.text_area ("Question",           value=row['reformatted_question'], height=100)
-option_a    = st.text_input("Option A",           value=row.get('option a', ''))
-option_b    = st.text_input("Option B",           value=row.get('option b', ''))
-option_c    = st.text_input("Option C",           value=row.get('option c', ''))
-option_d    = st.text_input("Option D",           value=row.get('option d', ''))
-category    = st.text_input("Category",           value=row.get('category', ''))
-subcategory = st.text_input("Subcategory",        value=row.get('Subcategory', ''))
+    st.subheader("Question")
+    question = st.text_area("Edit Question", value=row["question"], key=f"{user}_question")
 
-# -------- Save Button --------
-if st.button("💾 Save Changes"):
-    idx = df[df['id'] == image_id].index[0]
-    df.loc[idx, ['title', 'reformatted_question',
-                 'option a', 'option b', 'option c', 'option d',
-                 'category', 'Subcategory']] = [
-        title, question, option_a, option_b, option_c, option_d,
-        category, subcategory
-    ]
-    push_csv_to_github(df)
-    st.success("Changes saved and pushed to GitHub.")
+    # Image
+    img_path = os.path.join(IMAGE_FOLDER, f"{row['id']}.jpg")
+    try:
+        st.image(img_path, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Could not load image: {e}")
 
-# -------- Remove Button --------
-if st.button("🗑️ Remove Question"):
-    df = df[df['id'] != image_id].reset_index(drop=True)
-    push_csv_to_github(df)
-    st.success(f"Question ID {image_id} removed.")
-    if st.session_state.subset_index >= len(member_df) - 1 and st.session_state.subset_index > 0:
-        st.session_state.subset_index -= 1
-    st.rerun()
+    # Options + Comments
+    options = {}
+    for opt in ["A", "B", "C", "D", "E", "F"]:
+        opt_key = f"option{opt}"
+        comment_key = f"comment{opt}"
+        options[opt_key] = st.text_input(f"Option {opt}", value=row.get(opt_key, ""), key=f"{user}_{opt_key}")
+        st.caption(f"Comment {opt}: {row.get(comment_key, '')}")
+
+    # Buttons
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if st.button("Previous", key=f"{user}_prev") and idx > 0:
+            idx -= 1
+            st.session_state[f"{user}_index"] = idx
+            set_user_index(user, idx)
+            st.rerun()
+    with col2:
+        if st.button("Next", key=f"{user}_next") and idx < len(df) - 1:
+            idx += 1
+            st.session_state[f"{user}_index"] = idx
+            set_user_index(user, idx)
+            st.rerun()
+    with col3:
+        if st.button("Delete Question", key=f"{user}_del"):
+            delete_row(user, row["id"])
+            st.success("Question deleted.")
+            idx = max(0, idx - 1)
+            st.session_state[f"{user}_index"] = idx
+            set_user_index(user, idx)
+            st.rerun()
+    with col4:
+        if st.button("Save Edits", key=f"{user}_save"):
+            update_row(user, row["id"], {
+                "question": question,
+                "category": category,
+                "Subcategory": subcategory,
+                **options
+            })
+            st.success("Edits saved.")
+    
+    # Download button
+    st.markdown("### 💾 Export")
+    download_csv_button(user)
+    show_distribution_charts(df, user)
+
+# ---------- Main ----------
+
+def main():
+    st.title("Question Review Interface")
+    for user in USER_DB_MAP.keys():
+        with st.expander(user, expanded=True):
+            display_user_panel(user)
+
+if __name__ == "__main__":
+    main()
