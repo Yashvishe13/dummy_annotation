@@ -141,6 +141,7 @@ def download_csv_button(user):
 
 def display_user_panel(user):
     st.header(f"{user}'s Questions")
+    
     df = get_data(user)
 
     if df.empty:
@@ -153,12 +154,15 @@ def display_user_panel(user):
     idx = st.session_state[f"{user}_index"]
     row = df.iloc[idx]
 
+    st.markdown(f"**Question ID: {row['id']}**")
+
     # Progress bar
     st.markdown(f"**Question {idx + 1} of {len(df)}**")
     st.progress((idx + 1) / len(df))
 
     # Editable fields
     st.subheader("Category and Subcategory")
+    
     category = st.text_input("Category", value=row["category"], key=f"{user}_cat")
     subcategory = st.text_input("Subcategory", value=row["Subcategory"], key=f"{user}_subcat")
 
